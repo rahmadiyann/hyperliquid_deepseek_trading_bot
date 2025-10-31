@@ -1425,6 +1425,550 @@ This may leave state unsaved and positions unmanaged.
 3. Add funds to account
 4. Restart bot with fresh state
 
+## Docker Deployment
+
+The bot can be deployed using Docker for consistent, isolated environments. Docker deployment is recommended for production use and simplifies setup across different systems.
+
+### Prerequisites
+
+- **Docker**: Install Docker Desktop (Mac/Windows) or Docker Engine (Linux)
+  - Download: https://docs.docker.com/get-docker/
+  - Verify: `docker --version` (should show v20.10+)
+- **Docker Compose**: Included with Docker Desktop, separate install for Linux
+  - Verify: `docker-compose --version` (should show v2.0+)
+
+### Quick Start (Local Development)
+
+**1. Clone the repository and set up environment:**
+```bash
+git clone <repository-url>
+cd live_trading_bot
+cp .env.example .env
+# Edit .env with your credentials
+```
+
+**2. Build and start services:**
+```bash
+docker-compose up -d
+```
+
+This command:
+- Builds Docker images for bot and dashboard
+- Starts both services in detached mode (background)
+- Creates ./data directory for persistence
+- Maps port 8000 for dashboard access
+
+**3. Verify services are running:**
+```bash
+docker-compose ps
+```
+
+Expected output:
+```
+NAME                 STATUS              PORTS
+trading-bot          Up 2 minutes
+trading-dashboard    Up 2 minutes        0.0.0.0:8000->8000/tcp
+```
+
+**4. Access the dashboard:**
+- Open browser: http://localhost:8000
+- View real-time positions, trades, and AI reasoning
+
+**5. View logs:**
+```bash
+# Both services
+docker-compose logs -f
+
+# Bot only
+docker-compose logs -f bot
+
+# Dashboard only
+docker-compose logs -f dashboard
+
+# Last 100 lines
+docker-compose logs --tail=100 bot
+```
+
+**6. Stop services:**
+```bash
+# Stop but keep containers
+docker-compose stop
+
+# Stop and remove containers (data persists in ./data)
+docker-compose down
+
+# Stop, remove containers, and delete volumes (WARNING: deletes all data)
+docker-compose down -v
+```
+
+### Docker Compose Services
+
+The `docker-compose.yml` defines two services:
+
+**1. Bot Service (`bot`)**
+- **Purpose**: Runs the main trading bot
+- **Command**: `python main.py`
+- **Volumes**:
+  - `./data:/app/data` - Persists database, logs, state, and heartbeat
+- **Environment**: Variables loaded from `.env` file via `env_file`
+- **Restart**: Automatically restarts on failure
+- **Network**: Shares network with dashboard
+- **Healthcheck**: Heartbeat-based liveness monitoring
+  - Monitors `/app/data/health/heartbeat` file
+  - Fails if heartbeat is stale (>180 seconds old)
+  - Checks every 30s with 120s startup grace period
+  - Detects wedged or crashed bot loops
+
+**2. Dashboard Service (`dashboard`)**
+- **Purpose**: Runs the web dashboard for monitoring
+- **Command**: `python -m src.ui.dashboard --mode web --host 0.0.0.0 --port 8000`
+- **Volumes**:
+  - `./data:/app/data` - Access to bot's data (database, logs, state)
+- **Environment**: Variables loaded from `.env` file via `env_file`
+- **Ports**: `8000:8000` - Exposes dashboard on host port 8000
+- **Depends on**: Bot service (starts after bot)
+- **Restart**: Automatically restarts on failure
+- **Healthcheck**: HTTP endpoint monitoring
+  - Checks `/api/data` endpoint availability
+  - Checks every 30s with 40s startup grace period
+
+### Dockerfile Details
+
+The `Dockerfile` uses a multi-stage build for optimization:
+
+**Stage 1: Builder**
+- Base: `python:3.11-slim`
+- Installs build dependencies (gcc, g++)
+- Installs `uv` package manager
+- Installs Python dependencies from `pyproject.toml`
+- Result: ~500MB image with all build tools
+
+**Stage 2: Runtime**
+- Base: Fresh `python:3.11-slim`
+- Copies only installed packages from builder
+- Copies application source code
+- Runs as non-root user (`botuser`)
+- Exposes port 8000
+- Result: ~300MB final image (40% smaller)
+
+**Benefits of multi-stage build:**
+- Smaller final image (no build tools)
+- Faster deployments (less data to transfer)
+- Better security (minimal attack surface)
+- Cached layers (faster rebuilds)
+
+### Environment Variables
+
+Docker services load environment variables from `.env` file:
+
+**Required variables:**
+- `HYPERLIQUID_WALLET_ADDRESS` - Your wallet address
+- `HYPERLIQUID_PRIVATE_KEY` - Your private key (keep secret!)
+- `DEEPSEEK_API_KEY` - DeepSeek API key
+- `HYPERLIQUID_TESTNET` - Set to `true` for testnet, `false` for mainnet
+
+**Optional variables:**
+- `TRADING_INTERVAL_MINUTES` - Loop frequency (default: 3)
+- `MAX_LEVERAGE` - Maximum leverage (default: 10)
+- `RISK_PER_TRADE_PERCENT` - Risk per trade (default: 2.0)
+- `DASHBOARD_PORT` - Dashboard port (default: 8000)
+
+**Security note**: Never commit `.env` file to git. It's already in `.gitignore` and `.dockerignore`.
+
+### Data Persistence
+
+The `./data` directory is mounted as a volume and persists:
+- `trades.db` - SQLite database with trade history
+- `chat_log.txt` - AI reasoning messages
+- `bot_state.json` - Position metadata (stop-losses, profit targets)
+
+**Backup data:**
+```bash
+# Create backup
+tar -czf data-backup-$(date +%Y%m%d).tar.gz ./data
+
+# Restore backup
+tar -xzf data-backup-20250101.tar.gz
+```
+
+**Data location:**
+- **Bind mount** (default): `./data` on host filesystem
+- **Named volume** (alternative): Docker-managed, use `docker volume ls`
+
+### Common Docker Commands
+
+**Build and run:**
+```bash
+# Build images
+docker-compose build
+
+# Build with no cache (force rebuild)
+docker-compose build --no-cache
+
+# Start services
+docker-compose up -d
+
+# Build and start in one command
+docker-compose up -d --build
+```
+
+**Manage services:**
+```bash
+# View status
+docker-compose ps
+
+# Restart services
+docker-compose restart
+
+# Restart specific service
+docker-compose restart bot
+
+# Stop services
+docker-compose stop
+
+# Start stopped services
+docker-compose start
+```
+
+**Logs and debugging:**
+```bash
+# Follow logs (Ctrl+C to exit)
+docker-compose logs -f
+
+# View last N lines
+docker-compose logs --tail=50 bot
+
+# Execute command in running container
+docker-compose exec bot python -c "print('Hello')"
+
+# Open shell in container
+docker-compose exec bot /bin/bash
+
+# View container resource usage
+docker stats
+```
+
+**Cleanup:**
+```bash
+# Remove stopped containers
+docker-compose down
+
+# Remove containers and volumes (WARNING: deletes data)
+docker-compose down -v
+
+# Remove unused images
+docker image prune
+
+# Remove all unused Docker resources
+docker system prune -a
+```
+
+### Railway Deployment
+
+Railway is a platform-as-a-service that simplifies cloud deployment.
+
+**Important**: The Dockerfile is configured to run both the trading bot and dashboard in a single container, making Railway deployment simple and cost-effective. When you deploy to Railway, both services start automatically and the dashboard is accessible via Railway's provided URL. For local development, docker-compose.yml runs them as separate services for easier debugging.
+
+**Prerequisites:**
+- Railway account: https://railway.app
+- Railway CLI (optional): `npm install -g @railway/cli`
+
+**Deployment Steps:**
+
+**Option 1: Deploy via Railway Dashboard (Recommended)**
+
+1. **Create new project:**
+   - Go to https://railway.app/new
+   - Click "Deploy from GitHub repo"
+   - Authorize Railway to access your repository
+   - Select your trading bot repository
+
+2. **Configure environment variables:**
+   - In Railway dashboard, go to your project
+   - Click "Variables" tab
+   - Add all required variables from `.env.example`:
+     - `HYPERLIQUID_WALLET_ADDRESS`
+     - `HYPERLIQUID_PRIVATE_KEY`
+     - `DEEPSEEK_API_KEY`
+     - `HYPERLIQUID_TESTNET=true` (start with testnet)
+     - `TRADING_INTERVAL_MINUTES=3`
+     - `MAX_LEVERAGE=5`
+     - `RISK_PER_TRADE_PERCENT=1.0`
+
+3. **Deploy the trading bot (includes dashboard):**
+   - Railway auto-detects `Dockerfile`
+   - Click "Deploy"
+   - Wait for build to complete (~5 minutes first time)
+   - The Dockerfile automatically starts both the bot and dashboard using `start.sh`
+   - Check logs for:
+     - "Starting trading bot..." and "Starting dashboard..."
+     - "RUNNING ON TESTNET" message from bot
+     - Dashboard startup messages
+   - Railway provides a public URL for accessing the dashboard
+   - Both processes run in a single container, sharing the `/app/data` directory
+
+4. **Access the dashboard:**
+   - Railway automatically assigns a public URL to your deployment
+   - Find it in the Railway dashboard under "Settings" → "Domains"
+   - Example: `https://your-app-name.up.railway.app`
+   - The dashboard is accessible at this URL (port 8000 is automatically mapped)
+   - You can view:
+     - Current positions and account status
+     - Completed trades and performance metrics
+     - AI reasoning and decision logs
+     - Real-time updates via polling or WebSocket
+
+   **Note**: If you prefer to run bot and dashboard as separate Railway services (for independent scaling or monitoring), you can:
+   - Deploy the bot service with environment variable `RUN_MODE=bot-only`
+     - This will run only the trading bot (start.sh detects the mode and executes only `python main.py`)
+   - Deploy a second service with environment variable `RUN_MODE=dashboard-only`
+     - This will run only the dashboard (start.sh executes only the dashboard command)
+   - Default behavior when `RUN_MODE` is not set or set to `both`: runs both processes
+   - Valid RUN_MODE values: `both` (default), `bot-only`, `dashboard-only`
+   - This approach costs more (two services) but provides better isolation
+   - For most users, the single-container deployment (RUN_MODE=both or unset) is recommended
+
+5. **Add persistent storage (important!):**
+   - In service settings, go to "Volumes" tab
+   - Click "Add Volume"
+   - Mount path: `/app/data`
+   - This persists database, logs, and state across deployments
+   - Both bot and dashboard processes access this shared volume
+   - Without this, all data is lost on restart/redeploy
+
+**Option 2: Deploy via Railway CLI**
+
+```bash
+# Install Railway CLI
+npm install -g @railway/cli
+
+# Login
+railway login
+
+# Initialize project
+railway init
+
+# Link to existing project (if already created)
+railway link
+
+# Set environment variables
+railway variables set HYPERLIQUID_WALLET_ADDRESS=0x...
+railway variables set HYPERLIQUID_PRIVATE_KEY=...
+railway variables set DEEPSEEK_API_KEY=...
+railway variables set HYPERLIQUID_TESTNET=true
+
+# Deploy
+railway up
+
+# View logs
+railway logs
+```
+
+**Railway Configuration:**
+
+**Port binding:**
+- Railway sets `PORT` environment variable dynamically
+- The `start.sh` script uses `${PORT:-8000}` for the dashboard
+- This means: use Railway's PORT if set, otherwise default to 8000
+- No code changes needed - start.sh handles this automatically
+- Dashboard command in start.sh: `python -m src.ui.dashboard --mode web --host 0.0.0.0 --port ${PORT:-8000}`
+
+**Persistent storage:**
+- Railway provides ephemeral filesystem by default
+- Add Railway Volume for `/app/data` to persist database
+- Volume size: 1GB free tier, upgrade for more
+
+**Networking:**
+- In single-container deployment, bot and dashboard communicate via shared `/app/data` directory
+- No network communication needed (both processes access same filesystem)
+- Dashboard reads bot's database and logs directly
+- Railway provides public URL for dashboard access
+- Bot doesn't need public access (internal only)
+
+**Costs:**
+- Free tier: $5 credit/month, ~500 hours runtime
+- Hobby plan: $5/month for more resources
+- Pro plan: $20/month for production use
+
+**Monitoring:**
+- View logs in Railway dashboard
+- Set up alerts for errors
+- Monitor resource usage (CPU, memory, network)
+
+### Single Container vs Separate Services
+
+The trading bot supports two deployment modes:
+
+**Single Container (Recommended for Railway):**
+- **How it works**: Dockerfile runs `start.sh` which launches both bot and dashboard
+- **Pros**:
+  - Cost-effective (one Railway service instead of two)
+  - Simpler setup (one deployment)
+  - Shared `/app/data` directory (no network communication needed)
+  - Lower resource usage
+- **Cons**:
+  - Both processes restart together
+  - Logs are mixed (bot and dashboard in same stream)
+  - Can't scale bot and dashboard independently
+- **Use case**: Most users, production deployments, cost-conscious setups
+
+**Separate Services (Used in docker-compose for local dev):**
+- **How it works**: docker-compose.yml overrides CMD to run bot and dashboard separately
+- **Pros**:
+  - Independent restarts (dashboard crash doesn't affect bot)
+  - Separate logs (easier debugging)
+  - Can scale independently
+  - Better for development
+- **Cons**:
+  - Higher cost (two Railway services)
+  - More complex setup
+  - Requires shared volume or network communication
+- **Use case**: Local development, advanced users, when independent scaling is needed
+
+**How it's implemented:**
+- `Dockerfile` CMD: `./start.sh` (runs start script with shebang)
+- `start.sh` with RUN_MODE support:
+  - `RUN_MODE=both` (default): Launches both bot and dashboard with graceful shutdown
+  - `RUN_MODE=bot-only`: Executes only `python main.py`
+  - `RUN_MODE=dashboard-only`: Executes only the dashboard
+  - Uses `wait -n` to exit when first process fails (in both mode)
+  - Hardened shutdown trap with error handling
+- `docker-compose.yml` bot service: Overrides CMD to `python main.py` (bot only)
+- `docker-compose.yml` dashboard service: Overrides CMD to dashboard command (dashboard only)
+
+This design gives you the best of both worlds: simple single-container deployment for production (Railway) and separate services for local development (docker-compose).
+
+### Deployment Best Practices
+
+**1. Start with testnet:**
+- Always deploy to testnet first
+- Set `HYPERLIQUID_TESTNET=true`
+- Verify bot behavior for 24-48 hours
+- Check logs for errors
+
+**2. Use environment-specific configs:**
+- Development: `docker-compose.yml` (local)
+- Staging: Railway with testnet
+- Production: Railway with mainnet + monitoring
+
+**3. Secure your secrets:**
+- Never commit `.env` to git
+- Use Railway's encrypted variables
+- Rotate API keys regularly
+- Use separate wallets for testnet/mainnet
+
+**4. Monitor and alert:**
+- Set up log monitoring (Railway, Datadog, etc.)
+- Alert on errors, kill-switch activation, high drawdown
+- Monitor resource usage (CPU, memory, disk)
+
+**5. Backup regularly:**
+- Backup `./data` directory daily
+- Export database to JSON weekly
+- Store backups off-server (S3, Google Drive)
+
+**6. Update dependencies:**
+- Rebuild images monthly for security patches
+- Test updates on testnet first
+- Use `docker-compose build --no-cache` for clean rebuild
+
+**7. Scale appropriately:**
+- Start with single instance
+- Monitor performance (CPU, memory)
+- Scale up Railway plan if needed
+- Consider multiple bots for different strategies
+
+### Troubleshooting Docker Deployment
+
+**Build fails:**
+```bash
+# Check Docker is running
+docker ps
+
+# Check Dockerfile syntax
+docker build --no-cache .
+
+# View build logs
+docker-compose build --progress=plain
+
+# Clear Docker cache
+docker builder prune
+```
+
+**Services won't start:**
+```bash
+# Check logs
+docker-compose logs
+
+# Check .env file exists
+ls -la .env
+
+# Verify environment variables
+docker-compose config
+
+# Check port conflicts
+lsof -i :8000  # Mac/Linux
+netstat -ano | findstr :8000  # Windows
+```
+
+**Dashboard shows "No data available":**
+- Ensure bot service is running: `docker-compose ps`
+- Check data volume is mounted: `docker-compose exec dashboard ls -la /app/data`
+- Verify database exists: `docker-compose exec bot ls -la /app/data/trades.db`
+- Check file permissions: `ls -la ./data`
+
+**Bot crashes on startup:**
+- Check logs: `docker-compose logs bot`
+- Verify environment variables: `docker-compose exec bot env | grep HYPERLIQUID`
+- Test locally first: `python main.py`
+- Check API credentials are valid
+
+**High memory usage:**
+- Monitor: `docker stats`
+- Limit memory: Add `mem_limit: 512m` to service in docker-compose.yml
+- Check for memory leaks in logs
+- Restart services: `docker-compose restart`
+
+**Bot healthcheck failing (unhealthy status):**
+- Check heartbeat file exists: `docker-compose exec bot cat /app/data/health/heartbeat`
+- View health status: `docker inspect --format='{{json .State.Health}}' trading-bot | jq`
+- Verify bot is running: `docker-compose logs --tail=50 bot`
+- Check if loop is wedged: Look for stuck iterations in logs
+- Manually check heartbeat age: `echo $(($(date +%s) - $(cat ./data/health/heartbeat)))` (should be <180)
+- If heartbeat is stale, bot loop may be deadlocked - restart: `docker-compose restart bot`
+
+**Railway deployment fails:**
+- Check build logs in Railway dashboard
+- Verify Dockerfile builds locally: `docker build .`
+- Ensure all environment variables are set
+- Check Railway service limits (free tier restrictions)
+
+### Docker vs Local Development
+
+| Aspect | Docker | Local |
+|--------|--------|-------|
+| **Setup** | One command (`docker-compose up`) | Manual dependency installation |
+| **Isolation** | Fully isolated environment | Shares system Python |
+| **Portability** | Runs anywhere Docker runs | OS-specific issues |
+| **Resource usage** | ~500MB RAM overhead | Native performance |
+| **Development** | Slower iteration (rebuild) | Faster code changes |
+| **Production** | Recommended | Not recommended |
+| **Debugging** | Requires Docker knowledge | Standard Python debugging |
+
+**Recommendation:**
+- **Development**: Local (faster iteration)
+- **Testing**: Docker (consistent environment)
+- **Production**: Docker (Railway, AWS, etc.)
+
+### Next Steps
+
+1. **Test locally**: `docker-compose up -d` and verify both services work
+2. **Deploy to Railway testnet**: Follow Railway deployment steps with `HYPERLIQUID_TESTNET=true`
+3. **Monitor for 24-48 hours**: Check logs, verify trades, review AI decisions
+4. **Switch to mainnet**: Update `HYPERLIQUID_TESTNET=false` and redeploy
+5. **Set up monitoring**: Add alerts for errors and performance issues
+6. **Regular maintenance**: Update dependencies, backup data, review logs
+
 ## Setup
 
 ### Prerequisites

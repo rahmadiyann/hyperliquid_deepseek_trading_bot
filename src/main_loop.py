@@ -3,8 +3,7 @@ import json
 import time
 import signal
 import logging
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from datetime import datetime
 from dotenv import load_dotenv
 from src.exchange.hyperliquid_client import HyperliquidClient
 from src.ai.deepseek_engine import DeepSeekEngine
@@ -34,6 +33,7 @@ class TradingBot:
         symbols_str = os.getenv("TRADING_SYMBOLS", "BTC,ETH,SOL,BNB,XRP,DOGE")
         self.symbols = [s.strip() for s in symbols_str.split(",") if s.strip()]
         self.state_file_path = os.getenv("STATE_FILE_PATH", "./data/bot_state.json")
+        self.heartbeat_path = os.getenv("HEARTBEAT_PATH", "./data/health/heartbeat")
 
         # Order execution configuration
         self.order_execution_type = os.getenv("ORDER_EXECUTION_TYPE", "market").lower()
@@ -97,6 +97,11 @@ class TradingBot:
         self.iteration_count = 0
         self.start_time = datetime.now()
 
+        # Create health directory for heartbeat
+        heartbeat_dir = os.path.dirname(self.heartbeat_path)
+        if heartbeat_dir:
+            os.makedirs(heartbeat_dir, exist_ok=True)
+
         # Load persisted state
         self._load_state()
 
@@ -107,6 +112,9 @@ class TradingBot:
         self.logger.info("TradingBot initialized successfully")
         self.logger.info(f"Configuration: symbols={self.symbols}, interval={self.interval_minutes}min, state_file={self.state_file_path}")
         self.logger.info(f"Order execution: type={self.order_execution_type}, entry_cross_pct={self.entry_cross_pct*100:.2f}%")
+
+        # Write initial heartbeat
+        self._update_heartbeat()
 
     def run(self) -> None:
         """Main entry point to start the trading loop."""
@@ -243,7 +251,7 @@ class TradingBot:
                     if self.chat_logger:
                         try:
                             message = f"Stop-loss triggered for {symbol}: closed position at ${close_attempt['trigger_price']:.2f}"
-                            self.chat_logger.log_message("TRADE", message)
+                            self.chat_logger.log_message(category="TRADE", message=message)
                         except Exception as e:
                             self.logger.warning(f"Failed to log chat message: {e}")
 
@@ -277,7 +285,7 @@ class TradingBot:
                     if self.chat_logger:
                         try:
                             message = f"Take-profit triggered for {symbol}: closed position at ${close_attempt['trigger_price']:.2f} (target: ${close_attempt['target_price']:.2f})"
-                            self.chat_logger.log_message("TRADE", message)
+                            self.chat_logger.log_message(category="TRADE", message=message)
                         except Exception as e:
                             self.logger.warning(f"Failed to log chat message: {e}")
 
@@ -305,7 +313,7 @@ class TradingBot:
                 if self.chat_logger:
                     try:
                         summary = f"AI Decision for {decision['coin']}: {decision['signal']} ({decision['confidence']:.2f}) - {decision['reasoning'][:100]}..."
-                        self.chat_logger.log_message("AI_DECISION", summary)
+                        self.chat_logger.log_message(category="AI_DECISION", message=summary)
                     except Exception as e:
                         self.logger.warning(f"Failed to log AI decision to chat: {e}")
             
@@ -430,7 +438,7 @@ class TradingBot:
                     if self.chat_logger:
                         try:
                             message = f"Trade executed: {side.upper()} {quantity:.4f} {coin} @ ${order_price:.2f} (type: {self.order_execution_type})"
-                            self.chat_logger.log_message("TRADE", message)
+                            self.chat_logger.log_message(category="TRADE", message=message)
                         except Exception as e:
                             self.logger.warning(f"Failed to log trade to chat: {e}")
 
@@ -468,7 +476,7 @@ class TradingBot:
                             if self.chat_logger:
                                 try:
                                     message = f"Invalidation closed {symbol}: {condition}"
-                                    self.chat_logger.log_message("INVALIDATION", message)
+                                    self.chat_logger.log_message(category="INVALIDATION", message=message)
                                 except Exception as e:
                                     self.logger.warning(f"Failed to log invalidation: {e}")
                         else:
@@ -488,6 +496,9 @@ class TradingBot:
         
         # Step 10: Iteration complete
         self.logger.info(f"Iteration #{self.iteration_count} complete - positions: {len(positions)}, account: ${account_value:,.2f}")
+
+        # Update heartbeat for liveness monitoring
+        self._update_heartbeat()
 
     def _signal_handler(self, signum, frame) -> None:
         """Handle shutdown signals for graceful exit."""
@@ -548,6 +559,16 @@ class TradingBot:
         except Exception as e:
             self.logger.error(f"Error saving state: {str(e)}")
             raise
+
+    def _update_heartbeat(self) -> None:
+        """Update heartbeat file with current timestamp for liveness monitoring."""
+        try:
+            current_time = int(time.time())
+            with open(self.heartbeat_path, 'w') as f:
+                f.write(str(current_time))
+            self.logger.debug(f"Heartbeat updated: {current_time}")
+        except Exception as e:
+            self.logger.warning(f"Failed to update heartbeat: {str(e)}")
 
     def _fetch_candles_for_symbol(self, symbol: str) -> dict:
         """Fetch historical candles for a single symbol."""
