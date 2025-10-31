@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Bot Dashboard</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <style>
+        /* Custom styles for dashboard */
+        .positive { color: #28a745; }
+        .negative { color: #dc3545; }
+        .warning { color: #ffc107; }
+        .card { padding: 1rem; margin-bottom: 1rem; border: 1px solid #ddd; border-radius: 8px; }
+        .chat-log { max-height: 400px; overflow-y: auto; }
+        .message { margin-bottom: 0.5rem; padding: 0.5rem; border-left: 3px solid #007bff; background-color: #f8f9fa; }
+        .status-connected { color: #28a745; }
+        .status-disconnected { color: #dc3545; }
+        /* Add more custom styles as needed */
+    </style>
+</head>
+<body>
+    <main class="container">
+        <header>
+            <h1>Live Trading Bot Dashboard</h1>
+            <p>Last updated: <span id="last-updated">{{ last_updated }}</span></p>
+            <p id="connection-status">Connection: <span class="status-connected">Polling</span></p>
+        </header>
+
+        <!-- Account Summary -->
+        <section class="card" id="account-summary">
+            <h2>Account Summary</h2>
+            <div class="grid">
+                <div>Account Value: ${{ "%,.2f"|format(account.value) }}</div>
+                <div>Available Cash: ${{ "%,.2f"|format(account.cash) }}</div>
+                <div>Effective Leverage: {{ "%.2f"|format(account.leverage) }}x</div>
+                <div class="{% if account.drawdown > 15 %}negative{% elif account.drawdown > 10 %}warning{% else %}positive{% endif %}">
+                    Drawdown: {{ "%.2f"|format(account.drawdown) }}%
+                </div>
+            </div>
+        </section>
+
+        <!-- Current Positions -->
+        <section class="card" id="current-positions">
+            <h2>Current Positions</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Quantity</th>
+                        <th>Entry Price</th>
+                        <th>Current Price</th>
+                        <th>Unrealized P&L</th>
+                        <th>Leverage</th>
+                        <th>Holding Time</th>
+                    </tr>
+                </thead>
+                <tbody id="positions-tbody">
+                    {% if positions %}
+                    {% for position in positions %}
+                    <tr class="{% if position.unrealized_pnl > 0 %}positive-row{% else %}negative-row{% endif %}">
+                        <td>{{ position.coin }}</td>
+                        <td>{{ "%.4f"|format(position.quantity) }}</td>
+                        <td>${{ "%.2f"|format(position.entry_price) }}</td>
+                        <td>${{ "%.2f"|format(position.current_price) }}</td>
+                        <td class="{% if position.unrealized_pnl > 0 %}positive{% else %}negative{% endif %}">
+                            ${{ "%.2f"|format(position.unrealized_pnl) }}
+                        </td>
+                        <td>{{ position.leverage }}x</td>
+                        <td>{{ position.holding_time }}</td>
+                    </tr>
+                    {% endfor %}
+                    {% else %}
+                    <tr>
+                        <td colspan="7" style="text-align: center;">No open positions</td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </section>
+
+        <!-- Performance Metrics -->
+        <section class="card" id="performance-metrics">
+            <h2>Performance Metrics</h2>
+            <div class="grid">
+                <div>Total Trades: <span id="total-trades">{{ performance.total_trades }}</span></div>
+                <div>Win Rate: <span id="win-rate">{{ "%.2f"|format(performance.win_rate * 100) }}%</span></div>
+                <div class="{% if performance.total_pnl > 0 %}positive{% else %}negative{% endif %}">
+                    Total P&L: <span id="total-pnl">${{ "%,.2f"|format(performance.total_pnl) }}</span>
+                </div>
+                <div>Profit Factor: <span id="profit-factor">{{ "%.2f"|format(performance.profit_factor) }}</span></div>
+                <div>Best Trade: <span id="best-trade">${{ "%,.2f"|format(performance.best_trade) }}</span></div>
+                <div>Worst Trade: <span id="worst-trade">${{ "%,.2f"|format(performance.worst_trade) }}</span></div>
+            </div>
+        </section>
+
+        <!-- Completed Trades -->
+        <section class="card" id="completed-trades">
+            <h2>Completed Trades (Last 20)</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Entry</th>
+                        <th>Exit</th>
+                        <th>Holding Time</th>
+                        <th>Net P&L</th>
+                        <th>Exit Reason</th>
+                        <th>Date</th>
+                    </tr>
+                </thead>
+                <tbody id="trades-tbody">
+                    {% if trades %}
+                    {% for trade in trades[:20] %}
+                    <tr>
+                        <td>{{ trade.coin }}</td>
+                        <td>${{ "%.2f"|format(trade.entry_price) }}</td>
+                        <td>${{ "%.2f"|format(trade.exit_price) }}</td>
+                        <td>{{ trade.holding_time }}</td>
+                        <td class="{% if trade.net_pnl > 0 %}positive{% else %}negative{% endif %}">
+                            ${{ "%.2f"|format(trade.net_pnl) }}
+                        </td>
+                        <td>{{ trade.exit_reason }}</td>
+                        <td>{{ trade.date[:16] if trade.date else 'N/A' }}</td>
+                    </tr>
+                    {% endfor %}
+                    {% else %}
+                    <tr>
+                        <td colspan="7" style="text-align: center;">No completed trades yet</td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </section>
+
+        <!-- AI Chat Log -->
+        <section class="card" id="ai-chat-log">
+            <h2>AI Chat Log (Recent Messages)</h2>
+            <div class="chat-log" id="chat-log-container">
+                {% if chat_log %}
+                {% for message in chat_log %}
+                <div class="message">
+                    <pre>{{ message }}</pre>
+                </div>
+                {% endfor %}
+                {% else %}
+                <p>No AI messages logged</p>
+                {% endif %}
+            </div>
+        </section>
+    </main>
+
+    <script>
+        // Determine update mode from backend configuration
+        const USE_WS = {{ 'true' if enable_websocket else 'false' }};
+
+        let pollingHandle = null;
+
+        // Set connection status indicator
+        function setStatus(mode) {
+            document.getElementById('connection-status').innerHTML = `Connection: <span class="status-connected">${mode}</span>`;
+        }
+
+        // Fetch data via polling
+        async function fetchData() {
+            try {
+                const response = await fetch('/api/data');
+                const data = await response.json();
+                updateDashboard(data);
+                document.getElementById('last-updated').textContent = new Date().toLocaleString();
+            } catch (error) {
+                console.error('Failed to fetch data:', error);
+                document.getElementById('connection-status').innerHTML = 'Connection: <span class="status-disconnected">Disconnected</span>';
+            }
+        }
+
+        // Start polling updates
+        function startPolling() {
+            if (!pollingHandle) {
+                pollingHandle = setInterval(fetchData, 30000);
+                fetchData();  // Fetch immediately
+                setStatus('Polling');
+            }
+        }
+
+        function updateDashboard(data) {
+            // Update account summary
+            const account = data.account;
+            document.querySelector('#account-summary .grid').innerHTML = `
+                <div>Account Value: $${account.value.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+                <div>Available Cash: $${account.cash.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+                <div>Effective Leverage: ${account.leverage.toFixed(2)}x</div>
+                <div class="${account.drawdown > 15 ? 'negative' : account.drawdown > 10 ? 'warning' : 'positive'}">
+                    Drawdown: ${account.drawdown.toFixed(2)}%
+                </div>
+            `;
+
+            // Update positions - keep table structure stable
+            const positionsTbody = document.getElementById('positions-tbody');
+            if (data.positions.length > 0) {
+                positionsTbody.innerHTML = data.positions.map(position => `
+                    <tr class="${position.unrealized_pnl > 0 ? 'positive-row' : 'negative-row'}">
+                        <td>${position.coin}</td>
+                        <td>${position.quantity.toFixed(4)}</td>
+                        <td>$${position.entry_price.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                        <td>$${position.current_price.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                        <td class="${position.unrealized_pnl > 0 ? 'positive' : 'negative'}">
+                            $${position.unrealized_pnl.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                        </td>
+                        <td>${position.leverage}x</td>
+                        <td>${position.holding_time}</td>
+                    </tr>
+                `).join('');
+            } else {
+                positionsTbody.innerHTML = '<tr><td colspan="7" style="text-align: center;">No open positions</td></tr>';
+            }
+
+            // Update performance
+            const performance = data.performance;
+            document.getElementById('total-trades').textContent = performance.total_trades;
+            document.getElementById('win-rate').textContent = `${(performance.win_rate * 100).toFixed(2)}%`;
+            document.getElementById('total-pnl').textContent = `$${performance.total_pnl.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+            document.getElementById('profit-factor').textContent = performance.profit_factor.toFixed(2);
+            document.getElementById('best-trade').textContent = `$${performance.best_trade.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+            document.getElementById('worst-trade').textContent = `$${performance.worst_trade.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+
+            // Update trades - keep table structure stable
+            const tradesTbody = document.getElementById('trades-tbody');
+            if (data.trades.length > 0) {
+                tradesTbody.innerHTML = data.trades.slice(0, 20).map(trade => `
+                    <tr>
+                        <td>${trade.coin}</td>
+                        <td>$${trade.entry_price.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                        <td>$${trade.exit_price.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                        <td>${trade.holding_time}</td>
+                        <td class="${trade.net_pnl > 0 ? 'positive' : 'negative'}">
+                            $${trade.net_pnl.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                        </td>
+                        <td>${trade.exit_reason}</td>
+                        <td>${trade.date ? trade.date.substring(0, 16).replace('T', ' ') : 'N/A'}</td>
+                    </tr>
+                `).join('');
+            } else {
+                tradesTbody.innerHTML = '<tr><td colspan="7" style="text-align: center;">No completed trades yet</td></tr>';
+            }
+
+            // Update chat log
+            const chatContainer = document.getElementById('chat-log-container');
+            if (data.chat_log.length > 0) {
+                chatContainer.innerHTML = data.chat_log.map(message => `
+                    <div class="message">
+                        <pre>${message}</pre>
+                    </div>
+                `).join('');
+            } else {
+                chatContainer.innerHTML = '<p>No AI messages logged</p>';
+            }
+        }
+
+        // Initialize appropriate update mechanism
+        if (USE_WS) {
+            // Use WebSocket for real-time updates
+            const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = wsProtocol + '//' + location.host + '/ws';
+            const ws = new WebSocket(wsUrl);
+
+            ws.onopen = function(event) {
+                setStatus('WebSocket');
+                // Fetch once immediately to render current state
+                fetchData();
+            };
+
+            ws.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                updateDashboard(data);
+                document.getElementById('last-updated').textContent = new Date().toLocaleString();
+            };
+
+            ws.onclose = function(event) {
+                console.warn('WebSocket closed, falling back to polling');
+                document.getElementById('connection-status').innerHTML = 'Connection: <span class="status-disconnected">Disconnected</span>';
+                startPolling();
+            };
+
+            ws.onerror = function(error) {
+                console.error('WebSocket error:', error);
+                document.getElementById('connection-status').innerHTML = 'Connection: <span class="status-disconnected">Disconnected</span>';
+                startPolling();
+            };
+        } else {
+            // Use polling for updates
+            startPolling();
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,49 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+*.pyo
+*.pyd
+*.so
+.Python
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+venv/
+env/
+.uv/
+
+# Sensitive data - NEVER COMMIT
+.env
+
+# Databases and logs
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.log
+logs/
+
+# Chat logs
+chat_log*.txt
+
+# Bot state files
+bot_state.json
+data/bot_state.json
+
+# Data directories
+data/
+
+# Exported data
+exports/
+*.csv
+*.json
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
